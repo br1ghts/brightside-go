@@ -144,7 +144,7 @@ func configureShell() {
 
 func restoreZshConfig() {
 	zshrcPath := os.Getenv("HOME") + "/.zshrc"
-	configPath := getConfigPath("config/.zshrc")
+	configPath := ("config/.zshrc")
 
 	fmt.Println("🛠 Ensuring .zshrc is correctly set...")
 
@@ -280,24 +280,6 @@ func installP10K() {
 	}
 
 	fmt.Println("✅ Powerlevel10k and plugins installed successfully!")
-}
-
-// 🔍 Get the absolute path to the `config/` folder
-// 🔍 Get the absolute path to the config/ folder
-func getConfigPath(filename string) string {
-	ex, err := os.Executable()
-	if err != nil {
-		fmt.Println("❌ Failed to get executable path:", err)
-		return filename // Fallback
-	}
-	exPath := filepath.Dir(ex)
-
-	// When running via `go run`, manually set the root path
-	if strings.Contains(exPath, "/var/folders/") || strings.Contains(exPath, "go-build") {
-		exPath = "." // Assume current directory as project root in dev mode
-	}
-
-	return filepath.Join(exPath, filename)
 }
 
 // 🔍 Get the correct shell configuration file (`.zshrc` or `.bashrc`)
