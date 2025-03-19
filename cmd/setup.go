@@ -2,15 +2,20 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// setupCmd represents the setup command
+// Setup flags
+var resetFlag bool
+var silentFlag bool
+
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Installs dependencies and configures Brightside-Go",
@@ -19,9 +24,12 @@ var setupCmd = &cobra.Command{
 	},
 }
 
-// 🚀 Run Full Setup
 func runSetup() {
 	fmt.Println("🚀 Running Brightside-Go Setup...\n")
+
+	if resetFlag {
+		resetInstallation()
+	}
 
 	switch runtime.GOOS {
 	case "darwin":
@@ -35,7 +43,6 @@ func runSetup() {
 		os.Exit(1)
 	}
 
-	// Move binary & update environment
 	moveBinary()
 	configureShell()
 
@@ -50,16 +57,17 @@ func installMacDependencies() {
 		exec.Command("/bin/bash", "-c", "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)").Run()
 	}
 
-	packages := []string{"git", "yt-dlp", "ffmpeg", "wget", "zsh"}
+	packages := []string{"git", "yt-dlp", "ffmpeg", "wget", "zsh", "font-hack-nerd-font"}
 	for _, pkg := range packages {
-		fmt.Printf("🔹 Installing %s...\n", pkg)
-		exec.Command("brew", "install", pkg).Run()
+		if !commandExists(pkg) {
+			fmt.Printf("🔹 Installing %s...\n", pkg)
+			exec.Command("brew", "install", pkg).Run()
+		}
 	}
 
-	installP10K() // Install Powerlevel10k & plugins AFTER installing Zsh
+	installP10K()
 }
 
-// 🛠 Install Dependencies (Linux)
 // 🛠 Install Dependencies (Linux)
 func installLinuxDependencies() {
 	fmt.Println("🔹 Checking for APT...")
@@ -68,13 +76,15 @@ func installLinuxDependencies() {
 		os.Exit(1)
 	}
 
-	packages := []string{"git", "yt-dlp", "ffmpeg", "wget", "zsh"}
+	packages := []string{"git", "yt-dlp", "ffmpeg", "wget", "zsh", "fonts-powerline"}
 	for _, pkg := range packages {
-		fmt.Printf("🔹 Installing %s...\n", pkg)
-		exec.Command("sudo", "apt", "install", "-y", pkg).Run()
+		if !commandExists(pkg) {
+			fmt.Printf("🔹 Installing %s...\n", pkg)
+			exec.Command("sudo", "apt", "install", "-y", pkg).Run()
+		}
 	}
 
-	installP10K() // Install Powerlevel10k & plugins AFTER installing Zsh
+	installP10K()
 }
 
 // 🚚 Move Binary to `/usr/local/bin`
@@ -96,8 +106,8 @@ func moveBinary() {
 	}
 }
 
-// 🔧 Configure Shell (Import `.zshrc` and `p10k.zsh`)
 // 🔧 Configure Shell (Import `.zshrc`, `.p10k.zsh`, and install plugins)
+// 🔧 Configure Shell (Import `.zshrc` and plugins)
 func configureShell() {
 	shellConfig := getShellConfig()
 	if shellConfig == "" {
@@ -105,7 +115,10 @@ func configureShell() {
 		return
 	}
 
-	// Ensure Brightside is in PATH
+	// 🛠 Ensure `.zshrc` is restored
+	restoreZshConfig()
+
+	// ✅ Now it's safe to modify `.zshrc`
 	fmt.Println("🔧 Adding Brightside-Go to PATH in", shellConfig)
 	exportCmd := "export PATH=\"/usr/local/bin:$PATH\""
 	appendToFile(shellConfig, exportCmd)
@@ -113,65 +126,178 @@ func configureShell() {
 	// 🛠 Install Powerlevel10k & Plugins
 	installP10K()
 
-	// Import Custom `.zshrc` and `p10k.zsh`
-	fmt.Println("🛠 Importing custom .zshrc and Powerlevel10k config...")
-	configDir := "/usr/local/brightside-go/config"
-	os.MkdirAll(configDir, os.ModePerm)
-
-	copyFile("config/.zshrc", os.Getenv("HOME")+"/.zshrc")
-	copyFile("config/.p10k.zsh", os.Getenv("HOME")+"/.p10k.zsh")
-
-	// Ensure Zsh is the default shell
-	if strings.Contains(os.Getenv("SHELL"), "zsh") {
-		fmt.Println("✅ Zsh is already the default shell.")
-	} else {
-		fmt.Println("🛠 Setting Zsh as the default shell...")
-		exec.Command("chsh", "-s", "/bin/zsh").Run()
+	// 🛠 Double-check Oh My Zsh installation before sourcing `.zshrc`
+	if _, err := os.Stat(os.Getenv("HOME") + "/.oh-my-zsh/oh-my-zsh.sh"); os.IsNotExist(err) {
+		fmt.Println("⚠️ Warning: Oh My Zsh did not install correctly. Please run 'brightside setup' again.")
+		return
 	}
 
-	fmt.Println("✅ Shell configuration complete! Run 'source ~/.zshrc'")
+	// 🔄 Source `.zshrc` properly AFTER ensuring installation is done
+	fmt.Println("🔄 Sourcing .zshrc to apply changes...")
+	err := exec.Command("zsh", "-c", "sleep 2 && source ~/.zshrc").Run()
+	if err != nil {
+		fmt.Println("⚠️ Warning: Could not source .zshrc automatically. Try running 'source ~/.zshrc' manually.")
+	} else {
+		fmt.Println("✅ Shell configuration complete! Run 'source ~/.zshrc' if needed.")
+	}
 }
 
-// 🔥 Install Oh My Zsh, Powerlevel10k, and Plugins
+func restoreZshConfig() {
+	zshrcPath := os.Getenv("HOME") + "/.zshrc"
+	configPath := getConfigPath("config/.zshrc")
+
+	fmt.Println("🛠 Ensuring .zshrc is correctly set...")
+
+	// Force overwrite with Brightside's .zshrc
+	err := copyFile(configPath, zshrcPath)
+	if err != nil {
+		fmt.Println("❌ Failed to overwrite .zshrc:", err)
+	} else {
+		fmt.Println("✅ .zshrc successfully replaced with Brightside config.")
+	}
+}
+
+// 📂 Copy a File from One Location to Another (Ensures Parent Directories Exist)
+func copyFile(src, dest string) error {
+	fmt.Printf("📂 Copying %s → %s\n", src, dest)
+
+	// Ensure source exists
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("❌ ERROR: Could not open source file %s: %v", src, err)
+	}
+	defer srcFile.Close()
+
+	// Ensure destination directory exists
+	destDir := filepath.Dir(dest)
+	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+		return fmt.Errorf("❌ ERROR: Could not create parent directory for %s: %v", dest, err)
+	}
+
+	// Create the destination file
+	destFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("❌ ERROR: Could not create destination file %s: %v", dest, err)
+	}
+	defer destFile.Close()
+
+	// Copy file contents
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return fmt.Errorf("❌ ERROR: Failed to copy file %s to %s: %v", src, dest, err)
+	}
+
+	// Set correct permissions
+	srcInfo, err := os.Stat(src)
+	if err == nil {
+		os.Chmod(dest, srcInfo.Mode())
+	}
+
+	fmt.Printf("✅ Successfully copied %s → %s\n", src, dest)
+	return nil
+}
+
+// 📌 Append a Line to a File (Used for PATH updates)
+func appendToFile(filePath, line string) {
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("❌ Failed to modify", filePath, ":", err)
+		return
+	}
+	defer file.Close()
+
+	_, err = file.WriteString("\n" + line + "\n")
+	if err != nil {
+		fmt.Println("❌ Failed to write to", filePath, ":", err)
+	} else {
+		fmt.Println("✅ Updated", filePath)
+	}
+}
+
+// 🔥 Install Oh My Zsh, Powerlevel10k, and Zsh Plugins
 func installP10K() {
 	fmt.Println("🎨 Checking Oh My Zsh & Powerlevel10k installation...")
 
-	// 1️⃣ Ensure Oh My Zsh is Installed
-	if _, err := os.Stat(os.Getenv("HOME") + "/.oh-my-zsh"); os.IsNotExist(err) {
-		fmt.Println("⚡ Installing Oh My Zsh...")
-		exec.Command("sh", "-c", "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)").Run()
+	// ✅ Ensure Zsh is installed first
+	if !commandExists("zsh") {
+		fmt.Println("⚡ Installing Zsh...")
+		exec.Command("sudo", "apt", "install", "-y", "zsh").Run()
 	}
 
-	// 2️⃣ Ensure `$ZSH_CUSTOM` is Set
+	// ✅ Ensure Oh My Zsh is installed
+	ohMyZshPath := os.Getenv("HOME") + "/.oh-my-zsh"
+	if _, err := os.Stat(ohMyZshPath); os.IsNotExist(err) {
+		fmt.Println("⚡ Installing Oh My Zsh...")
+		cmd := exec.Command("/bin/bash", "-c", "curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | bash")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+		if err != nil {
+			fmt.Println("❌ Failed to install Oh My Zsh:", err)
+			return
+		}
+	} else {
+		fmt.Println("✅ Oh My Zsh is already installed.")
+	}
+
+	// ✅ Ensure Powerlevel10k is installed
 	zshCustom := os.Getenv("HOME") + "/.oh-my-zsh/custom"
 	os.Setenv("ZSH_CUSTOM", zshCustom)
 
-	// 3️⃣ Install Powerlevel10k
 	p10kPath := zshCustom + "/themes/powerlevel10k"
 	if _, err := os.Stat(p10kPath); os.IsNotExist(err) {
 		fmt.Println("🎨 Installing Powerlevel10k...")
-		exec.Command("git", "clone", "--depth=1", "https://github.com/romkatv/powerlevel10k.git", p10kPath).Run()
+		err := exec.Command("git", "clone", "--depth=1", "https://github.com/romkatv/powerlevel10k.git", p10kPath).Run()
+		if err != nil {
+			fmt.Println("❌ Failed to install Powerlevel10k:", err)
+		}
 	} else {
 		fmt.Println("✅ Powerlevel10k is already installed.")
 	}
 
-	// 4️⃣ Install Zsh Plugins
+	// ✅ Ensure Zsh Plugins are Installed
 	pluginDir := zshCustom + "/plugins"
 	os.MkdirAll(pluginDir, os.ModePerm)
 
-	// Autosuggestions
+	// 🔹 Autosuggestions
 	autosuggestionsPath := pluginDir + "/zsh-autosuggestions"
 	if _, err := os.Stat(autosuggestionsPath); os.IsNotExist(err) {
 		fmt.Println("💡 Installing zsh-autosuggestions...")
-		exec.Command("git", "clone", "https://github.com/zsh-users/zsh-autosuggestions", autosuggestionsPath).Run()
+		err := exec.Command("git", "clone", "https://github.com/zsh-users/zsh-autosuggestions", autosuggestionsPath).Run()
+		if err != nil {
+			fmt.Println("❌ Failed to install zsh-autosuggestions:", err)
+		}
 	}
 
-	// Syntax Highlighting
+	// 🔹 Syntax Highlighting
 	syntaxHighlightingPath := pluginDir + "/zsh-syntax-highlighting"
 	if _, err := os.Stat(syntaxHighlightingPath); os.IsNotExist(err) {
 		fmt.Println("💡 Installing zsh-syntax-highlighting...")
-		exec.Command("git", "clone", "https://github.com/zsh-users/zsh-syntax-highlighting", syntaxHighlightingPath).Run()
+		err := exec.Command("git", "clone", "https://github.com/zsh-users/zsh-syntax-highlighting", syntaxHighlightingPath).Run()
+		if err != nil {
+			fmt.Println("❌ Failed to install zsh-syntax-highlighting:", err)
+		}
 	}
+
+	fmt.Println("✅ Powerlevel10k and plugins installed successfully!")
+}
+
+// 🔍 Get the absolute path to the `config/` folder
+// 🔍 Get the absolute path to the config/ folder
+func getConfigPath(filename string) string {
+	ex, err := os.Executable()
+	if err != nil {
+		fmt.Println("❌ Failed to get executable path:", err)
+		return filename // Fallback
+	}
+	exPath := filepath.Dir(ex)
+
+	// When running via `go run`, manually set the root path
+	if strings.Contains(exPath, "/var/folders/") || strings.Contains(exPath, "go-build") {
+		exPath = "." // Assume current directory as project root in dev mode
+	}
+
+	return filepath.Join(exPath, filename)
 }
 
 // 🔍 Get the correct shell configuration file (`.zshrc` or `.bashrc`)
@@ -187,43 +313,26 @@ func getShellConfig() string {
 	}
 }
 
-// 📂 Copy File (Used for .zshrc and .p10k.zsh)
-func copyFile(src, dest string) {
-	input, err := os.ReadFile(src)
-	if err != nil {
-		fmt.Println("❌ Error reading", src, ":", err)
-		return
-	}
+// 📂 Reset Installation
+func resetInstallation() {
+	fmt.Println("🗑 Resetting Brightside-Go installation...")
 
-	err = os.WriteFile(dest, input, 0644)
-	if err != nil {
-		fmt.Println("❌ Error writing", dest, ":", err)
-	} else {
-		fmt.Println("✅ Successfully imported", dest)
-	}
+	os.Remove("/usr/local/bin/brightside")
+	os.RemoveAll(os.Getenv("HOME") + "/.oh-my-zsh")
+	os.RemoveAll(os.Getenv("HOME") + "/.p10k.zsh")
+	os.RemoveAll(os.Getenv("HOME") + "/.zshrc")
+
+	fmt.Println("✅ Brightside-Go has been reset! Run 'brightside setup' again.")
 }
 
-// 📌 Append a Line to a File (Used for PATH updates)
-func appendToFile(filePath, line string) {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Println("❌ Failed to modify", filePath, ":", err)
-		return
-	}
-	defer file.Close()
-
-	if _, err := file.WriteString("\n" + line + "\n"); err != nil {
-		fmt.Println("❌ Failed to write to", filePath, ":", err)
-		return
-	}
-}
-
-// 🛠 Check if a command exists (Used for `brew` and `apt` detection)
+// 📂 Check if a command exists
 func commandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
 }
 
 func init() {
+	setupCmd.Flags().BoolVar(&resetFlag, "reset", false, "Reset Brightside-Go installation")
+	setupCmd.Flags().BoolVar(&silentFlag, "silent", false, "Run Brightside-Go setup without prompts")
 	rootCmd.AddCommand(setupCmd)
 }
