@@ -3,6 +3,8 @@ module brightside-go
 go 1.24.1
 
 require (
+	github.com/fatih/color v1.18.0
+	github.com/gempir/go-twitch-irc/v3 v3.3.0
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/spf13/cobra v1.9.1
 )
@@ -10,8 +12,6 @@ require (
 require (
 	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/andybalholm/cascadia v1.3.1 // indirect
-	github.com/fatih/color v1.18.0 // indirect
-	github.com/gempir/go-twitch-irc/v3 v3.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
